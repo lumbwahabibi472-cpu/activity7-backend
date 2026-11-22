@@ -1,0 +1,27 @@
+{
+  "name": "activity7-backend",
+  "version": "1.0.0",
+  "description": "ICT251 Activity 7 Backend API - Community Clean Up Requests (Mulungushi University)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --experimental-sqlite server.js",
+    "dev": "node --experimental-sqlite --watch server.js"
+  },
+  "keywords": [
+    "express",
+    "sqlite",
+    "rest-api",
+    "ict251",
+    "mulungushi-university"
+  ],
+  "author": "Computer Science Student",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  },
+  "optionalDependencies": {
+    "sqlite3": "^5.1.7"
+  }
+}

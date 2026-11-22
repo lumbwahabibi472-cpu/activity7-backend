@@ -2,226 +2,117 @@
 // ICT251 Activity 7: Backend Development - Mulungushi University
 // Project: Community Clean Up Requests
 // File: db.js
-// Description: Multi-database driver supporting Render PostgreSQL via DATABASE_URL
-//              with transparent fallback to SQLite for local development.
+// Description: Manages the SQLite database connection, applies schema.sql,
+//              seeds sample data only once, and provides query helper functions.
 // ==============================================================================
 
 const path = require('path');
 const fs = require('fs');
 
-const isPostgres = Boolean(process.env.DATABASE_URL);
+// Note on Database Inconsistency:
+// Page 3 of the assignment mentions PostgreSQL (pg) and DATABASE_URL, while
+// Page 4 explicitly mandates creating an SQLite database.
+// This project follows the Page 4 SQLite requirement.
+const { DatabaseSync } = require('node:sqlite');
 
-let pool = null;
-let sqliteDb = null;
+// Determine database file path from environment or default to local directory
+const dbPath = process.env.DATABASE_PATH
+  ? path.resolve(process.env.DATABASE_PATH)
+  : path.join(__dirname, 'cleanup_requests.db');
 
-// Initial 8 sample records for single-run seeding
-const SAMPLE_RECORDS = [
-  [
-    'Great North Road Litter Sweep',
-    'Litter Cleanup',
-    'Community volunteers clearing discarded plastic bottles, food wrappers, and cardboard debris along pedestrian walkways near the campus gate.',
-    'Completed'
-  ],
-  [
-    'Mulungushi Riverbank Plastic Extraction',
-    'Waterway Cleanup',
-    'Removing floating plastic containers, discarded polythene bags, and debris along the riverbank to restore aquatic habitats.',
-    'In progress'
-  ],
-  [
-    'Kabwe Central Market Drain Unblocking',
-    'Drainage Clearance',
-    'Unblocking primary storm drainage trenches filled with silt, organic refuse, and packaging waste to prevent monsoon street flooding.',
-    'Pending'
-  ],
-  [
-    'Town Centre Public Park Turf Restoration',
-    'Park Maintenance',
-    'Raking fallen leaves, removing broken tree branches, and emptying overflowing community waste receptacles in the recreation grounds.',
-    'Completed'
-  ],
-  [
-    'Old Bus Terminus Rubbish Clearing',
-    'Public Transit Zone',
-    'Sweeping commuter waiting shelters and collecting discarded beverage tins, paper bags, and litter around loading bays.',
-    'Pending'
-  ],
-  [
-    'Community Clinic Perimeter Debris Pick',
-    'Health Facility Care',
-    'Clearing overgrown brush, weeds, and windblown litter surrounding the perimeter fence of the local health post.',
-    'In progress'
-  ],
-  [
-    'Civic Centre Courtyard Tidying Drive',
-    'Civic Grounds',
-    'Power-sweeping walkway tiles, pruning untamed hedges, and picking litter in the central public square.',
-    'Completed'
-  ],
-  [
-    'Railway Reserve Illegal Dump Remediation',
-    'Illegal Dumping',
-    'Clearing bulk discarded concrete rubble, scrap tires, and household refuse unlawfully dumped near the railway access road.',
-    'Pending'
-  ]
-];
+// Ensure destination directory exists (vital for hosted environments with custom mount paths)
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
 
-if (isPostgres) {
-  // ---------------------------------------------------------------------------
-  // PostgreSQL Configuration (Render Cloud Database)
-  // ---------------------------------------------------------------------------
-  const { Pool } = require('pg');
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
-  });
+// Open or create the SQLite database
+const db = new DatabaseSync(dbPath);
 
-  // Self-initializing schema & single-run seeding for PostgreSQL
-  (async () => {
-    try {
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS records (
-          id SERIAL PRIMARY KEY,
-          title VARCHAR(80) NOT NULL CHECK (length(title) >= 3 AND length(title) <= 80),
-          category VARCHAR(40) NOT NULL CHECK (length(category) >= 2 AND length(category) <= 40),
-          description VARCHAR(300) NOT NULL CHECK (length(description) >= 5 AND length(description) <= 300),
-          status VARCHAR(20) NOT NULL CHECK (status IN ('Pending', 'In progress', 'Completed'))
-        );
-      `);
+// Enable foreign keys and Write-Ahead Logging (WAL) for better concurrency & reliability
+db.exec('PRAGMA foreign_keys = ON;');
+db.exec('PRAGMA journal_mode = WAL;');
 
-      const countRes = await pool.query('SELECT COUNT(*) AS count FROM records');
-      const count = parseInt(countRes.rows[0].count, 10);
-
-      if (count === 0) {
-        for (const [title, category, description, status] of SAMPLE_RECORDS) {
-          await pool.query(
-            'INSERT INTO records (title, category, description, status) VALUES ($1, $2, $3, $4)',
-            [title, category, description, status]
-          );
-        }
-        console.log('PostgreSQL database initialized and seeded with 8 sample Community Clean Up Requests.');
-      } else {
-        console.log(`PostgreSQL database connected. Found ${count} existing records (seed skipped).`);
-      }
-    } catch (err) {
-      console.error('Error during PostgreSQL initialization:', err.message);
-    }
-  })();
+// Initialize table schema from schema.sql
+const schemaPath = path.join(__dirname, 'schema.sql');
+if (fs.existsSync(schemaPath)) {
+  const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+  db.exec(schemaSql);
 } else {
-  // ---------------------------------------------------------------------------
-  // SQLite Fallback (Local Offline Development)
-  // ---------------------------------------------------------------------------
-  const { DatabaseSync } = require('node:sqlite');
-  const dbPath = process.env.DATABASE_PATH
-    ? path.resolve(process.env.DATABASE_PATH)
-    : path.join(__dirname, 'cleanup_requests.db');
+  console.error('schema.sql file not found at:', schemaPath);
+}
 
-  const dbDir = path.dirname(dbPath);
-  if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true });
+// Seed the database ONLY ONCE so records are not duplicated on server restart
+const countStmt = db.prepare('SELECT COUNT(*) AS count FROM records');
+const countResult = countStmt.get();
+
+if (countResult && countResult.count === 0) {
+  const seedPath = path.join(__dirname, 'seed.sql');
+  if (fs.existsSync(seedPath)) {
+    const seedSql = fs.readFileSync(seedPath, 'utf8');
+    db.exec(seedSql);
+    console.log('Database initialized: Seeded with 8 sample Community Clean Up Requests.');
   }
-
-  sqliteDb = new DatabaseSync(dbPath);
-  sqliteDb.exec('PRAGMA foreign_keys = ON;');
-  sqliteDb.exec('PRAGMA journal_mode = WAL;');
-
-  // Schema creation
-  sqliteDb.exec(`
-    CREATE TABLE IF NOT EXISTS records (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL CHECK (length(title) >= 3 AND length(title) <= 80),
-      category TEXT NOT NULL CHECK (length(category) >= 2 AND length(category) <= 40),
-      description TEXT NOT NULL CHECK (length(description) >= 5 AND length(description) <= 300),
-      status TEXT NOT NULL CHECK (status IN ('Pending', 'In progress', 'Completed'))
-    );
-  `);
-
-  const countRow = sqliteDb.prepare('SELECT COUNT(*) AS count FROM records').get();
-  if (countRow && countRow.count === 0) {
-    const insertStmt = sqliteDb.prepare(
-      'INSERT INTO records (title, category, description, status) VALUES (?, ?, ?, ?)'
-    );
-    for (const record of SAMPLE_RECORDS) {
-      insertStmt.run(...record);
-    }
-    console.log('SQLite database initialized and seeded with 8 sample Community Clean Up Requests.');
-  } else {
-    console.log(`SQLite database connected. Found ${countRow.count} existing records (seed skipped).`);
-  }
+} else {
+  console.log(`Database ready: ${countResult.count} records exist in database (seed skipped).`);
 }
 
 /**
  * Executes a parameterized SQL query returning all matching rows.
+ * @param {string} sql - Parameterized SQL query
+ * @param {Array} params - Array of parameter values to bind
+ * @returns {Array} List of record objects
  */
-async function getAll(sql, params = []) {
-  if (isPostgres) {
-    const res = await pool.query(sql, params);
-    return res.rows;
-  } else {
-    const sqliteSql = sql.replace(/\$[0-9]+/g, '?');
-    const stmt = sqliteDb.prepare(sqliteSql);
-    return stmt.all(...params);
-  }
+function getAll(sql, params = []) {
+  const stmt = db.prepare(sql);
+  return stmt.all(...params);
 }
 
 /**
  * Executes a parameterized SQL query returning a single matching row.
+ * @param {string} sql - Parameterized SQL query
+ * @param {Array} params - Array of parameter values to bind
+ * @returns {Object|null} Matching record object or undefined/null
  */
-async function getOne(sql, params = []) {
-  if (isPostgres) {
-    const res = await pool.query(sql, params);
-    return res.rows[0] || null;
-  } else {
-    const sqliteSql = sql.replace(/\$[0-9]+/g, '?');
-    const stmt = sqliteDb.prepare(sqliteSql);
-    return stmt.get(...params) || null;
-  }
+function getOne(sql, params = []) {
+  const stmt = db.prepare(sql);
+  const row = stmt.get(...params);
+  return row || null;
 }
 
 /**
- * Executes an INSERT, UPDATE, or DELETE statement.
+ * Executes a parameterized INSERT, UPDATE, or DELETE SQL statement.
+ * @param {string} sql - Parameterized SQL statement
+ * @param {Array} params - Array of parameter values to bind
+ * @returns {Object} Object containing lastID and changes count
  */
-async function run(sql, params = []) {
-  if (isPostgres) {
-    const res = await pool.query(sql, params);
-    return {
-      rowCount: res.rowCount,
-      rows: res.rows
-    };
-  } else {
-    const sqliteSql = sql.replace(/\$[0-9]+/g, '?');
-    const stmt = sqliteDb.prepare(sqliteSql);
-    const info = stmt.run(...params);
-    return {
-      lastID: Number(info.lastInsertRowid),
-      changes: Number(info.changes)
-    };
-  }
+function run(sql, params = []) {
+  const stmt = db.prepare(sql);
+  const info = stmt.run(...params);
+  return {
+    lastID: Number(info.lastInsertRowid),
+    changes: Number(info.changes)
+  };
 }
 
 /**
- * Performs a health verification query against the active database.
+ * Checks database health by executing a simple verification query.
+ * @returns {boolean} True if database responds successfully, false otherwise.
  */
-async function checkHealth() {
+function checkHealth() {
   try {
-    if (isPostgres) {
-      const res = await pool.query('SELECT 1 AS alive');
-      return res && res.rows && res.rows[0].alive === 1;
-    } else {
-      const row = sqliteDb.prepare('SELECT 1 AS alive').get();
-      return Boolean(row && row.alive === 1);
-    }
+    const result = db.prepare('SELECT 1 AS alive').get();
+    return Boolean(result && result.alive === 1);
   } catch (err) {
-    console.error('Database health check failed:', err.message);
+    console.error('Database health check failed:', err);
     return false;
   }
 }
 
 module.exports = {
-  isPostgres,
+  db,
   getAll,
   getOne,
   run,
-  checkHealth,
-  pool
+  checkHealth
 };

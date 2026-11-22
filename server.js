@@ -189,7 +189,7 @@ app.get('/', (req, res) => {
       <h1>🌱 Community Clean Up Requests API</h1>
       <p>Mulungushi University | School of Engineering and Technology | Department of Computer Science</p>
       <p>Course: <strong>ICT251 Introduction to Web Technologies</strong> &mdash; Activity 7: Backend Development</p>
-      <div class="badge">Student Number: [2023000000 / Student ID Placeholder]</div>
+      <div class="badge">Student Number: 202508259</div>
     </header>
 
     <div class="card">
